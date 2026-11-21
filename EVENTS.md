@@ -18,34 +18,54 @@ the site is built. Do not remove those markers.
 
 ## Add an event
 
-Create `_events/<slug>.md`. The filename (without `.md`) **is the URL**:
-`_events/2026-12-05-film_night_foo.md` → `/event/2026-12-05-film_night_foo.html`.
+Create `_events/<date>-<slug>.md`. The filename (without `.md`) **is the URL**, and it
+must start with the event's date: `_events/2026-12-05-film_night_foo.md` →
+`/event/2026-12-05-film_night_foo.html`. The build fails if the filename date and the
+`date:` field disagree.
 
 ```markdown
 ---
 title: Film Night - The Battle of Algiers
-date: 2026-12-05          # YYYY-MM-DD; drives sorting, upcoming/past and "Next Event"
+date: 2026-12-05          # YYYY-MM-DD; must match the filename prefix
 time: 7:00 PM
 location: Drunken Monkey
 ticket_url: https://givebutter.com/palestine-film-night-Battle-of-Algiers
-image: /assets/images/2026-11-20-film_night_the_battle_of_algiers/1.png
+image: /assets/images/2026-12-05-film_night_the_battle_of_algiers.png
 published: true
 ---
 
 Optional description. Blank lines separate paragraphs and are shown on the event page.
 ```
 
+Covers live **flat in `assets/images/`** and are named after the event file:
+`assets/images/<date>-<slug>.jpg|png`. For a new event, upload any photo (the build
+converts it to WebP, rotates and strips metadata).
+
 | Field | Required | Notes |
 |---|---|---|
 | `title` | yes | Shown as the page `<h1>` and as `alt="<title> cover image"` in listings |
-| `date` | yes | `YYYY-MM-DD`. Use the **real event date**; filenames may keep older dates |
+| `date` | yes | `YYYY-MM-DD`. Must equal the filename prefix |
 | `time` | yes | Free text, e.g. `7:00 PM` |
 | `location` | yes | Venue name |
-| `image` | yes | Site-absolute path (`/assets/images/...`). Must exist in the repo |
+| `image` | yes | Site-absolute path (`/assets/images/<date>-<slug>.ext`). Must exist in the repo |
 | `ticket_url` | no | Must start with `https://`. Omit for free events (no Buy Ticket button) |
 | `published` | no | `true` (default) or `false` to hide everywhere |
 | `publish_at` | no | ISO date/time (`YYYY-MM-DDTHH:MM`, Orlando time) before which the event stays hidden |
 | description | no | Markdown body after the front matter; plain paragraphs |
+
+### Renaming an event
+
+If you correct an event's date (and therefore its filename), add the old slug to
+`_data/legacy_slugs.json` so the old URL keeps working:
+
+```json
+{
+  "2026-11-20-film_night_the_battle_of_algiers": "2026-12-05-film_night_the_battle_of_algiers"
+}
+```
+
+The build then emits a small redirect page at the old URL (meta refresh + `canonical`).
+Entries whose target event no longer exists are skipped with a warning.
 
 ## What visitors see on an event page
 
@@ -99,8 +119,8 @@ editor that commits to this repository for you — no Git, no local build.
 
 Notes for editors:
 
-- The filename (and therefore the event URL) is generated automatically from the title,
-  and renaming is disabled so published links never change.
+- The filename (and therefore the event URL) is generated automatically from the date and
+  title, and renaming is disabled so published links never change.
 - **Description** is plain text; leave a blank line between paragraphs.
 - **Ticket link** must be a full `https://` URL. Leave it empty for free events.
 - **Published** off = hidden everywhere (page, home page, events, tickets) without

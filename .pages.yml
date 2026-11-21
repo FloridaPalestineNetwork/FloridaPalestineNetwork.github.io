@@ -17,7 +17,7 @@ content:
     # {primary} is the slugified title; field: false keeps the filename automatic
     # so URLs always stay lowercase-hyphenated and stable.
     filename:
-      template: "{primary}.md"
+      template: "{fields.date}-{primary}.md"
       field: false
     operations:
       # Renaming would change a published event's URL, so it is disabled.

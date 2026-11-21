@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import json
 import posixpath
 import re
 import shutil
@@ -35,6 +36,7 @@ EVENTS_DIR = ROOT / "_events"
 TEMPLATES_DIR = ROOT / "templates"
 EVENT_OUT_DIR = ROOT / "event"
 CSS_PATH = ROOT / "assets/css/styles.css"
+LEGACY_SLUGS_PATH = ROOT / "_data/legacy_slugs.json"
 
 SITE_TZ = ZoneInfo("America/New_York")
 SITE_URL = "https://floridapalestinenetwork.org"
@@ -164,6 +166,12 @@ def parse_event(path: Path) -> dict:
 
     if not SLUG_RE.match(path.stem):
         raise BuildError(f"{path.name}: slug may only contain a-z, 0-9, dot, dash, underscore")
+
+    date_prefix = f"{when.isoformat()}-"
+    if not path.stem.startswith(date_prefix):
+        raise BuildError(
+            f"{path.name}: filename must start with the event date, i.e. {date_prefix}<name>.md"
+        )
 
     return {
         "slug": path.stem,
@@ -381,6 +389,60 @@ def split_events(events: list[dict], now: datetime) -> tuple[list[dict], list[di
     return visible, scheduled
 
 
+def load_legacy_slugs(known_slugs: set[str]) -> dict[str, str]:
+    """Map old event slugs to current ones, for redirect pages after a rename."""
+    if not LEGACY_SLUGS_PATH.is_file():
+        return {}
+    try:
+        data = json.loads(LEGACY_SLUGS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BuildError(f"{LEGACY_SLUGS_PATH.name}: invalid JSON ({exc})")
+    if not isinstance(data, dict):
+        raise BuildError(f"{LEGACY_SLUGS_PATH.name}: expected an object of old-slug -> new-slug")
+
+    mapping: dict[str, str] = {}
+    for old, new in data.items():
+        if not isinstance(old, str) or not isinstance(new, str):
+            raise BuildError(f"{LEGACY_SLUGS_PATH.name}: keys and values must be strings")
+        if not SLUG_RE.match(old):
+            raise BuildError(f"{LEGACY_SLUGS_PATH.name}: invalid old slug {old!r}")
+        if old in known_slugs:
+            print(
+                f"warning: {LEGACY_SLUGS_PATH.name}: {old!r} is a current event; skipping redirect",
+                file=sys.stderr,
+            )
+            continue
+        if new not in known_slugs:
+            print(
+                f"warning: {LEGACY_SLUGS_PATH.name}: {old!r} points at unknown event {new!r}; skipping",
+                file=sys.stderr,
+            )
+            continue
+        mapping[old] = new
+    return mapping
+
+
+def render_redirect(target_slug: str) -> str:
+    url = f"/event/{target_slug}.html"
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en-US">\n\n'
+        "<head>\n"
+        '    <meta charset="utf-8">\n'
+        '    <meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "    <title>Event moved - FPN</title>\n"
+        '    <meta name="robots" content="noindex">\n'
+        f'    <link rel="canonical" href="{url}">\n'
+        f'    <meta http-equiv="refresh" content="0; url={url}">\n'
+        f'    <script>location.replace("{url}");</script>\n'
+        "</head>\n\n"
+        "<body>\n"
+        f'    <p>This event has moved to <a href="{url}">{url}</a>.</p>\n'
+        "</body>\n\n"
+        "</html>\n"
+    )
+
+
 def compute_outputs(
     version: str,
     now: datetime,
@@ -388,7 +450,8 @@ def compute_outputs(
 ) -> tuple[dict[Path, str], list[dict], list[dict], list[dict]]:
     webp_sources = webp_sources or set()
     today = now.astimezone(SITE_TZ).date()
-    visible, scheduled = split_events(load_events(), now)
+    events = load_events()
+    visible, scheduled = split_events(events, now)
 
     for event in visible:
         event["image_ref"] = (
@@ -415,6 +478,11 @@ def compute_outputs(
             event, template, nav, footer, version
         )
         outputs[Path("event") / f"{event['slug']}.ics"] = render_ics(event, now)
+
+    visible_slugs = {event["slug"] for event in visible}
+    for old_slug, target_slug in load_legacy_slugs({event["slug"] for event in events}).items():
+        if target_slug in visible_slugs:
+            outputs[Path("event") / f"{old_slug}.html"] = render_redirect(target_slug)
 
     regions_by_page = {
         "index.html": {
