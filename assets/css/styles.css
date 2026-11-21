@@ -184,7 +184,7 @@ p img {
 
 .container {
     display: flex;
-    justify-content: space-between;
+    justify-content: center; /* Center the single remaining column */
     flex-wrap: wrap; /* Allow items to wrap to the next line */
 }
 
