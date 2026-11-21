@@ -51,6 +51,31 @@ Optional description. Blank lines separate paragraphs and are shown on the event
 - **Hide without deleting:** set `published: false`.
 - **Delete:** delete the data file, run the build (the generated page is removed).
 
+## Edit from your phone (Pages CMS)
+
+The `.pages.yml` file in this repo configures [Pages CMS](https://pagescms.org), a hosted
+editor that commits to this repository for you — no Git, no local build.
+
+1. On your phone, open **https://app.pagescms.org** and sign in with GitHub.
+2. Authorize/install the **Pages CMS GitHub App** on the `FloridaPalestineNetwork`
+   account and grant it access to this repository (one-time).
+3. Pick the repository, keep the branch on `main`, and open **Events**.
+4. Create / edit / delete events, upload a cover image, and toggle **Published**.
+   Choose **Save** — Pages CMS commits `_events/<slug>.md` (and any uploaded image).
+5. The **Build events** GitHub Action rebuilds the pages and deploys — live in about
+   a minute or two. Check the Actions tab (or the site) if it does not appear.
+
+Notes for editors:
+
+- The filename (and therefore the event URL) is generated automatically from the title,
+  and renaming is disabled so published links never change.
+- **Description** is plain text; leave a blank line between paragraphs.
+- **Ticket link** must be a full `https://` URL. Leave it empty for free events.
+- **Published** off = hidden everywhere (page, home page, events, tickets) without
+  deleting the data.
+- Uploaded images land in `assets/images/` and the field stores `/assets/images/<file>`;
+  JPEG is best for photos, and keeping files under ~1&nbsp;MB keeps the site fast.
+
 ## Build
 
 ```bash

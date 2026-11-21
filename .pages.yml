@@ -1,0 +1,94 @@
+# Pages CMS configuration — https://pagescms.org
+# Edits are committed straight to this repository; the "Build events" GitHub
+# Action regenerates event pages and the listings, then deploys the site.
+
+media:
+  input: assets/images
+  output: /assets/images
+  rename: safe
+  extensions: [jpg, jpeg, png, webp]
+
+content:
+  - name: events
+    label: Events
+    type: collection
+    path: _events
+    format: yaml-frontmatter
+    # {primary} is the slugified title; field: false keeps the filename automatic
+    # so URLs always stay lowercase-hyphenated and stable.
+    filename:
+      template: "{primary}.md"
+      field: false
+    operations:
+      # Renaming would change a published event's URL, so it is disabled.
+      rename: false
+    view:
+      fields: [date, title, published]
+      primary: title
+      sort: [date, title]
+      search: [title, location]
+      default:
+        sort: date
+        order: desc
+    fields:
+      - name: title
+        label: Event title
+        type: string
+        required: true
+        options:
+          maxlength: 120
+
+      - name: date
+        label: Event date
+        type: date
+        required: true
+        options:
+          format: yyyy-MM-dd
+
+      - name: time
+        label: Start time (e.g. 7:00 PM)
+        type: string
+        required: true
+        options:
+          maxlength: 20
+
+      - name: location
+        label: Location (venue name)
+        type: string
+        required: true
+        options:
+          maxlength: 120
+
+      - name: ticket_url
+        label: Ticket link
+        type: string
+        description: Full https:// link (Givebutter). Leave empty for free events.
+        options:
+          maxlength: 500
+
+      - name: image
+        label: Cover image
+        type: image
+        required: true
+        description: Shown on the Events, Tickets and Home listings.
+        options:
+          categories: [image]
+          extensions: [jpg, jpeg, png, webp]
+
+      - name: published
+        label: Published
+        type: boolean
+        default: true
+        description: Turn off to hide this event everywhere.
+
+      - name: body
+        label: Description (optional)
+        type: text
+        description: Plain text. Leave a blank line between paragraphs.
+
+settings:
+  commit:
+    templates:
+      create: "Event: add {path} (Pages CMS)"
+      update: "Event: update {path} (Pages CMS)"
+      delete: "Event: delete {path} (Pages CMS)"

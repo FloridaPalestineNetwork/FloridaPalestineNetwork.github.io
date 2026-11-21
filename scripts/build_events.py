@@ -34,7 +34,7 @@ PAGE_REGIONS = {
     "events.html": ("upcoming", "past"),
     "tickets.html": ("upcoming",),
 }
-SKIP_WHEN_STAGING = {".git", ".github", ".gitignore", "_events", "templates", "scripts", "_site"}
+SKIP_WHEN_STAGING = {".git", ".github", ".gitignore", ".pages.yml", "_events", "templates", "scripts", "_site"}
 
 MARKER_RE = re.compile(
     r"(?P<open>[ \t]*<!-- events:(?P<name>[a-z_]+):start -->\n)"
@@ -99,7 +99,11 @@ def parse_event(path: Path) -> dict:
         raise BuildError(f"{path.name}: missing required field(s): {', '.join(missing)}")
 
     try:
-        when = datetime.strptime(meta["date"], "%Y-%m-%d").date()
+        # Accept plain dates and full ISO timestamps (some editors write the latter)
+        date_match = re.match(r"^(\d{4}-\d{2}-\d{2})", meta["date"].strip())
+        if not date_match:
+            raise ValueError
+        when = datetime.strptime(date_match.group(1), "%Y-%m-%d").date()
     except ValueError:
         raise BuildError(f"{path.name}: date must be YYYY-MM-DD, got {meta['date']!r}")
 
@@ -113,7 +117,8 @@ def parse_event(path: Path) -> dict:
 
     image = meta["image"].strip()
     if not image.startswith("/"):
-        raise BuildError(f"{path.name}: image must be an absolute site path")
+        # Editors such as Pages CMS may write paths without the leading slash
+        image = "/" + image
     if not (ROOT / image.lstrip("/")).is_file():
         raise BuildError(f"{path.name}: image not found: {image}")
 
