@@ -1,2 +1,6 @@
 # Personal project notes should not be committed
 project_note.md
+
+# Local build output
+_site/
+__pycache__/

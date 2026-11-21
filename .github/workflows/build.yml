@@ -1,0 +1,62 @@
+name: Build events
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *" # daily: keeps "upcoming"/"past" accurate as dates pass
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-events-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check generated event pages
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify generated pages match _events data
+        run: python3 scripts/build_events.py --check
+
+  deploy:
+    name: Deploy to GitHub Pages
+    # Requires Settings -> Pages -> Source = "GitHub Actions" AND a repository
+    # variable DEPLOY_TO_PAGES=true. Until both are set this job is skipped and
+    # the site keeps deploying from the main branch as before.
+    needs: check
+    if: |
+      vars.DEPLOY_TO_PAGES == 'true' &&
+      github.event_name != 'pull_request' &&
+      (needs.check.result == 'success' || needs.check.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build site into _site/
+        run: python3 scripts/build_events.py --out _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
