@@ -81,6 +81,14 @@ content:
         default: true
         description: Turn off to hide this event everywhere.
 
+      - name: publish_at
+        label: Publish automatically at (optional)
+        type: date
+        description: Leave empty to publish immediately. Times are Orlando (Eastern).
+        options:
+          time: true
+          format: "yyyy-MM-dd'T'HH:mm"
+
       - name: body
         label: Description (optional)
         type: text

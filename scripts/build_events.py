@@ -17,17 +17,28 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import posixpath
 import re
 import shutil
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+try:  # image optimisation is optional; the build still works without Pillow
+    from PIL import Image, ImageOps
+except ImportError:  # pragma: no cover - exercised only when Pillow is absent
+    Image = ImageOps = None
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "_events"
 TEMPLATES_DIR = ROOT / "templates"
 EVENT_OUT_DIR = ROOT / "event"
 CSS_PATH = ROOT / "assets/css/styles.css"
+
+SITE_TZ = ZoneInfo("America/New_York")
+MAX_IMAGE_EDGE = 1600
+WEBP_QUALITY = 82
 
 GRID_INDENT = 16
 NEXT_INDENT = 20
@@ -47,7 +58,7 @@ MARKER_RE = re.compile(
 CSS_LINK_RE = re.compile(r'(href="/assets/css/styles\.css)(?:\?v=[0-9a-f]+)?(")')
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 REQUIRED = ("title", "date", "time", "location", "image")
-OPTIONAL = {"ticket_url": "", "description": "", "published": "true"}
+OPTIONAL = {"ticket_url": "", "description": "", "published": "true", "publish_at": ""}
 
 
 class BuildError(Exception):
@@ -56,6 +67,30 @@ class BuildError(Exception):
 
 def esc(value: str) -> str:
     return html.escape(value, quote=False)
+
+
+def parse_local_datetime(raw: str, name: str, field: str) -> datetime:
+    """Parse an ISO date/time; values without an offset are interpreted as Orlando time."""
+    value = raw.strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(value.replace(" ", "T", 1))
+        except ValueError:
+            raise BuildError(f"{name}: {field} must be an ISO date/time (YYYY-MM-DDTHH:MM), got {raw!r}")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SITE_TZ)
+    return parsed
+
+
+def webp_ref(image: str) -> str:
+    root, ext = posixpath.splitext(image)
+    if ext.lower() in (".jpg", ".jpeg", ".png"):
+        return root + ".webp"
+    return image
 
 
 def human_date(when: date) -> str:
@@ -136,8 +171,14 @@ def parse_event(path: Path) -> dict:
         "location": meta["location"].strip(),
         "ticket_url": ticket,
         "image": image,
+        "image_ref": image,
         "description": match.group(2).strip(),
         "published": published_raw == "true",
+        "publish_at": (
+            parse_local_datetime(meta["publish_at"], path.name, "publish_at")
+            if meta.get("publish_at")
+            else None
+        ),
         "source": path.name,
     }
 
@@ -157,7 +198,7 @@ def render_entry(event: dict, indent: int) -> str:
         f'{pad}<div class="event">\n'
         f'{pad}    <p>{event["date_human"]}</p>\n'
         f'{pad}    <a href="/event/{event["slug"]}.html">\n'
-        f'{pad}        <img src="{esc(event["image"])}"\n'
+        f'{pad}        <img src="{esc(event["image_ref"])}"\n'
         f'{pad}            alt="{esc(event["title"])} cover image">\n'
         f'{pad}    </a>\n'
         f'{pad}</div>\n'
@@ -238,15 +279,40 @@ def update_css_link(text: str, version: str, page_name: str) -> str:
     return updated
 
 
-def compute_outputs(version: str, today: date) -> tuple[dict[Path, str], list[dict], list[dict]]:
-    events = load_events()
-    published = [event for event in events if event["published"]]
+def split_events(events: list[dict], now: datetime) -> tuple[list[dict], list[dict]]:
+    """Return (visible, scheduled) events; scheduled ones are unpublished until publish_at."""
+    visible: list[dict] = []
+    scheduled: list[dict] = []
+    for event in events:
+        if not event["published"]:
+            continue
+        if event["publish_at"] and now < event["publish_at"]:
+            scheduled.append(event)
+            continue
+        visible.append(event)
+    return visible, scheduled
+
+
+def compute_outputs(
+    version: str,
+    now: datetime,
+    webp_sources: set[str] | None = None,
+) -> tuple[dict[Path, str], list[dict], list[dict], list[dict]]:
+    webp_sources = webp_sources or set()
+    today = now.astimezone(SITE_TZ).date()
+    visible, scheduled = split_events(load_events(), now)
+
+    for event in visible:
+        event["image_ref"] = (
+            webp_ref(event["image"]) if event["image"] in webp_sources else event["image"]
+        )
+
     upcoming = sorted(
-        (event for event in published if event["date"] >= today),
+        (event for event in visible if event["date"] >= today),
         key=lambda event: (event["date"], event["slug"]),
     )
     past = sorted(
-        (event for event in published if event["date"] < today),
+        (event for event in visible if event["date"] < today),
         key=lambda event: (event["date"], event["slug"]),
         reverse=True,
     )
@@ -256,7 +322,7 @@ def compute_outputs(version: str, today: date) -> tuple[dict[Path, str], list[di
     footer = read_template("footer.html")
 
     outputs: dict[Path, str] = {}
-    for event in published:
+    for event in visible:
         outputs[Path("event") / f"{event['slug']}.html"] = render_event_page(
             event, template, nav, footer, version
         )
@@ -292,7 +358,51 @@ def compute_outputs(version: str, today: date) -> tuple[dict[Path, str], list[di
             path.read_text(encoding="utf-8"), version, path.name
         )
 
-    return outputs, upcoming, past
+    return outputs, upcoming, past, scheduled
+
+
+def optimize_images(destination: Path, image_paths: list[str]) -> set[str]:
+    """Write optimized .webp copies into destination and return the originals converted.
+
+    Images are auto-rotated from EXIF, downscaled to MAX_IMAGE_EDGE, re-encoded as
+    WebP (quality WEBP_QUALITY) and saved without any metadata.
+    """
+    if not image_paths:
+        return set()
+    if Image is None:
+        print(
+            "warning: Pillow is not installed - serving original images "
+            "(run: pip install -r requirements.txt)",
+            file=sys.stderr,
+        )
+        return set()
+
+    converted: set[str] = set()
+    for source in sorted(set(image_paths)):
+        ref = webp_ref(source)
+        if ref == source:
+            continue
+        src = ROOT / source.lstrip("/")
+        dest = destination / ref.lstrip("/")
+        try:
+            with Image.open(src) as original:
+                image = ImageOps.exif_transpose(original)
+                if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+                    image = image.convert("RGBA")
+                else:
+                    image = image.convert("RGB")
+                image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE), Image.LANCZOS)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                # No exif/icc arguments -> metadata is dropped
+                image.save(dest, "WEBP", quality=WEBP_QUALITY, method=6)
+            if dest.stat().st_size >= src.stat().st_size:
+                # Never ship a "compressed" file that is bigger than the original
+                dest.unlink()
+                continue
+            converted.add(source)
+        except (OSError, ValueError) as exc:
+            print(f"warning: could not convert {source} to WebP: {exc}", file=sys.stderr)
+    return converted
 
 
 def stage_copy(destination: Path) -> None:
@@ -338,29 +448,74 @@ def parse_today(value: str) -> date:
         raise argparse.ArgumentTypeError("expected YYYY-MM-DD")
 
 
+def parse_now(value: str) -> datetime:
+    try:
+        return parse_local_datetime(value, "argument", "--now")
+    except BuildError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build event pages and listings from _events/*.md")
     parser.add_argument("--check", action="store_true", help="validate data and templates without writing anything")
     parser.add_argument("--out", type=Path, metavar="DIR", help="write a deployable copy into DIR")
-    parser.add_argument("--today", type=parse_today, default=date.today(), metavar="YYYY-MM-DD")
+    parser.add_argument(
+        "--today",
+        type=parse_today,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="pretend it is noon on this date in America/New_York",
+    )
+    parser.add_argument(
+        "--now",
+        type=parse_now,
+        default=None,
+        metavar="ISO-DATETIME",
+        help="evaluate publish_at at this instant (default: now in America/New_York)",
+    )
+    parser.add_argument(
+        "--no-webp",
+        action="store_true",
+        help="keep the original image formats instead of converting covers to WebP",
+    )
     args = parser.parse_args(argv)
+    if args.check and args.out:
+        parser.error("--check and --out cannot be combined")
 
     try:
         version = css_version()
-        outputs, upcoming, past = compute_outputs(version, args.today)
+        if args.now:
+            now = args.now
+        elif args.today:
+            now = datetime.combine(args.today, time(12, 0), tzinfo=SITE_TZ)
+        else:
+            now = datetime.now(SITE_TZ)
+        now_label = now.astimezone(SITE_TZ).strftime("%Y-%m-%d %H:%M %Z")
+
+        destination: Path | None = None
+        webp_sources: set[str] = set()
+        if args.out:
+            destination = args.out if args.out.is_absolute() else ROOT / args.out
+            stage_copy(destination)
+            if not args.no_webp:
+                visible, _ = split_events(load_events(), now)
+                webp_sources = optimize_images(destination, [event["image"] for event in visible])
+
+        outputs, upcoming, past, scheduled = compute_outputs(version, now, webp_sources)
 
         if args.check:
             print(
                 f"OK: {len(outputs)} files would be generated "
-                f"({len(upcoming)} upcoming, {len(past)} past events, today={args.today.isoformat()})."
+                f"({len(upcoming)} upcoming, {len(past)} past, {len(scheduled)} scheduled for later, "
+                f"now={now_label})."
             )
             return 0
 
-        if args.out:
-            destination = args.out if args.out.is_absolute() else ROOT / args.out
-            stage_copy(destination)
+        if destination is not None:
             changed, removed = write_outputs(outputs, destination, prune=True)
             print(f"Staged {len(outputs)} files into {destination.relative_to(ROOT)}/")
+            if webp_sources:
+                print(f"Optimized {len(webp_sources)} cover image(s) to WebP.")
         else:
             changed, removed = write_outputs(outputs, ROOT, prune=True)
             print(f"Regenerated {len(outputs)} files (css v{version}).")
@@ -375,7 +530,10 @@ def main(argv: list[str] | None = None) -> int:
             print("Removed (no matching data file):")
             for rel in removed:
                 print(f"  - {rel}")
-        print(f"Events: {len(upcoming)} upcoming, {len(past)} past, today={args.today.isoformat()}")
+        print(
+            f"Events: {len(upcoming)} upcoming, {len(past)} past, "
+            f"{len(scheduled)} hidden until publish_at, now={now_label}"
+        )
         return 0
     except BuildError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * *" # daily: keeps "upcoming"/"past" accurate as dates pass
+    - cron: "*/15 * * * *" # publishes publish_at events and rolls upcoming/past without a push
 
 permissions:
   contents: read
@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install build dependencies
+        run: pip install -r requirements.txt
       - name: Build _site from _events data
         run: python3 scripts/build_events.py --out _site
       - name: Upload Pages artifact

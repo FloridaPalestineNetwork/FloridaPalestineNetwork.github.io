@@ -1,0 +1,2 @@
+# Build dependencies (image optimisation). The generator itself is stdlib-only.
+Pillow>=10.4,<14
