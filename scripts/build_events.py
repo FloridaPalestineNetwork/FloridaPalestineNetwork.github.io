@@ -3,10 +3,12 @@
 
 Source of truth: _events/*.md (YAML-ish front matter, filename = page slug).
 
+The generated HTML is not committed: CI runs `--out _site` and deploys that.
+
 Usage:
-    python3 scripts/build_events.py               # regenerate files in the repo
-    python3 scripts/build_events.py --check       # fail if repo output is stale
     python3 scripts/build_events.py --out _site   # build a deployable copy
+    python3 scripts/build_events.py               # regenerate files in place (optional)
+    python3 scripts/build_events.py --check       # validate data/templates, write nothing
     python3 scripts/build_events.py --today 2026-12-01   # deterministic run
 """
 
@@ -329,22 +331,6 @@ def write_outputs(outputs: dict[Path, str], target_root: Path, prune: bool) -> t
     return changed, removed
 
 
-def check_outputs(outputs: dict[Path, str]) -> list[str]:
-    problems: list[str] = []
-    for rel, text in outputs.items():
-        target = ROOT / rel
-        if not target.is_file():
-            problems.append(f"missing: {rel.as_posix()}")
-        elif target.read_text(encoding="utf-8") != text:
-            problems.append(f"out of date: {rel.as_posix()}")
-    expected = {rel.name for rel in outputs if rel.parent == Path("event")}
-    if EVENT_OUT_DIR.is_dir():
-        for path in sorted(EVENT_OUT_DIR.glob("*.html")):
-            if path.name not in expected:
-                problems.append(f"stale (no data file): event/{path.name}")
-    return problems
-
-
 def parse_today(value: str) -> date:
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -354,7 +340,7 @@ def parse_today(value: str) -> date:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build event pages and listings from _events/*.md")
-    parser.add_argument("--check", action="store_true", help="verify generated files are up to date")
+    parser.add_argument("--check", action="store_true", help="validate data and templates without writing anything")
     parser.add_argument("--out", type=Path, metavar="DIR", help="write a deployable copy into DIR")
     parser.add_argument("--today", type=parse_today, default=date.today(), metavar="YYYY-MM-DD")
     args = parser.parse_args(argv)
@@ -364,14 +350,10 @@ def main(argv: list[str] | None = None) -> int:
         outputs, upcoming, past = compute_outputs(version, args.today)
 
         if args.check:
-            problems = check_outputs(outputs)
-            if problems:
-                print("Generated event pages are out of date:", file=sys.stderr)
-                for problem in problems:
-                    print(f"  - {problem}", file=sys.stderr)
-                print("\nRun: python3 scripts/build_events.py", file=sys.stderr)
-                return 1
-            print(f"OK: {len(outputs)} generated files are up to date.")
+            print(
+                f"OK: {len(outputs)} files would be generated "
+                f"({len(upcoming)} upcoming, {len(past)} past events, today={args.today.isoformat()})."
+            )
             return 0
 
         if args.out:

@@ -4,3 +4,6 @@ project_note.md
 # Local build output
 _site/
 __pycache__/
+
+# Generated event pages (built from _events/*.md at deploy time)
+event/*.html

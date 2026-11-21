@@ -1,19 +1,19 @@
 # Managing events
 
-Event pages and the event listings are **generated** from small data files. You never
-edit `event/*.html` by hand — edit or add a file in `_events/` and run the build.
+Event pages and the event listings are **generated** from small data files. Never edit
+`event/*.html` (it is not even committed) — edit or add a file in `_events/`.
 
 ```
 _events/2026-12-05-film_night_the_battle_of_algiers.md   ← one file per event
 templates/event.html                                     ← page layout
 templates/nav.html, templates/footer.html                ← shared chrome
 scripts/build_events.py                                  ← the generator (stdlib only)
-event/*.html                                             ← GENERATED — do not edit
+event/*.html                                             ← generated at build time, gitignored
 ```
 
 `index.html` ("Next Event"), `events.html` (upcoming + past grids) and `tickets.html`
-are filled between `<!-- events:...:start -->` / `<!-- events:...:end -->` markers.
-Do not remove those markers.
+are filled between `<!-- events:...:start -->` / `<!-- events:...:end -->` markers when
+the site is built. Do not remove those markers.
 
 ## Add an event
 
@@ -79,9 +79,9 @@ Notes for editors:
 ## Build
 
 ```bash
-python3 scripts/build_events.py            # regenerate event pages + listings
-python3 scripts/build_events.py --check    # exit 1 if anything is out of date
-python3 scripts/build_events.py --out _site  # build a deployable copy (local preview)
+python3 scripts/build_events.py --out _site     # build the site into _site/ (normal use)
+python3 scripts/build_events.py --check         # validate data + templates, write nothing
+python3 scripts/build_events.py                 # optional: regenerate in place
 python3 scripts/build_events.py --today 2026-12-06   # testing: pretend it is that date
 ```
 
@@ -101,13 +101,12 @@ invalid dates, non-`https` ticket URLs, missing image files, broken or duplicate
 
 ## How it publishes
 
-- `main` currently deploys with **Settings → Pages → Deploy from a branch**, so the
-  generated HTML committed in the repo is what goes live. Always run the build before
-  committing (CI runs `--check` and fails if you forget).
-- The `Build events` workflow (`.github/workflows/build.yml`) runs `--check` on every
-  push/PR, and has a daily scheduled build so "upcoming" becomes "past" on time.
-- To switch to building on GitHub's side (needed for a future phone admin UI that only
-  commits `_events/*.md`): set **Settings → Pages → Source** to **GitHub Actions**, then
-  add the repository variable `DEPLOY_TO_PAGES=true`. The `deploy` job in
-  `build.yml` then builds `_site/` and publishes it. Re-check that the custom domain
-  (`floridapalestinenetwork.org`) is still listed under Settings → Pages afterwards.
+- **GitHub Actions builds and deploys the site.** `.github/workflows/build.yml` runs
+  `python3 scripts/build_events.py --out _site` on every push to `main`, on demand, and
+  once a day (06:00 UTC) so events move from "upcoming" to "past" on time, then publishes
+  `_site/` with GitHub Pages (Settings → Pages → Source: **GitHub Actions**).
+- Because of that, **generated HTML is never committed** (see `.gitignore`) and editing
+  `_events/*.md` — including from Pages CMS on your phone — is enough to publish.
+  Pull requests run the same build so broken data fails before merge.
+- The custom domain is configured in Settings → Pages (the `CNAME` file is just a
+  leftover convenience and is harmless).
