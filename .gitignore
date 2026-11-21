@@ -7,3 +7,4 @@ __pycache__/
 
 # Generated event pages (built from _events/*.md at deploy time)
 event/*.html
+event/*.ics

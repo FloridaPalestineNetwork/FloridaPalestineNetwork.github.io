@@ -9,6 +9,7 @@ templates/event.html                                     ← page layout
 templates/nav.html, templates/footer.html                ← shared chrome
 scripts/build_events.py                                  ← the generator (stdlib only)
 event/*.html                                             ← generated at build time, gitignored
+event/*.ics                                              ← generated calendar files, gitignored
 ```
 
 `index.html` ("Next Event"), `events.html` (upcoming + past grids) and `tickets.html`
@@ -45,6 +46,18 @@ Optional description. Blank lines separate paragraphs and are shown on the event
 | `published` | no | `true` (default) or `false` to hide everywhere |
 | `publish_at` | no | ISO date/time (`YYYY-MM-DDTHH:MM`, Orlando time) before which the event stays hidden |
 | description | no | Markdown body after the front matter; plain paragraphs |
+
+## What visitors see on an event page
+
+- Title, date, time and venue
+- **Buy Ticket** (only when `ticket_url` is set) and **Add to Calendar** buttons
+- The cover image below the buttons
+
+**Add to Calendar** downloads `/event/<slug>.ics`, a standard iCalendar file that opens
+in Apple Calendar, Google Calendar, Outlook, etc. It uses the event date and `time`
+(entries are 2 hours long — change `EVENT_DURATION` in `scripts/build_events.py` to
+adjust). If `time` cannot be parsed the entry is created as an **all-day** event. The
+file includes the venue, the ticket link and a link back to the event page.
 
 ## Scheduled publishing
 
@@ -118,7 +131,12 @@ On `--out` builds, each visible event's cover is converted with Pillow
 - **Resized** to at most 1600px on the long edge and encoded as **WebP** (quality 82)
 - **Never bigger:** if the WebP would be larger than the original (e.g. an already
   optimised PNG), the original is kept and referenced instead
-- The listing HTML is rewritten to the `.webp` path; originals stay in the repository
+- The listing **and the event page** are rewritten to the `.webp` path; originals stay
+  in the repository
+- Every `<img>` must have descriptive alt text — covers read "<event title> cover image",
+  the logo "Florida Palestine Network logo", and social icons
+  "Florida Palestine Network on Instagram / on X (Twitter) / on Facebook". **The build
+  fails** if any generated page has an `<img>` without `alt`.
 
 Local preview:
 

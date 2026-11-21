@@ -21,7 +21,7 @@ import posixpath
 import re
 import shutil
 import sys
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -37,8 +37,10 @@ EVENT_OUT_DIR = ROOT / "event"
 CSS_PATH = ROOT / "assets/css/styles.css"
 
 SITE_TZ = ZoneInfo("America/New_York")
+SITE_URL = "https://floridapalestinenetwork.org"
 MAX_IMAGE_EDGE = 1600
 WEBP_QUALITY = 82
+EVENT_DURATION = timedelta(hours=2)
 
 GRID_INDENT = 16
 NEXT_INDENT = 20
@@ -56,6 +58,7 @@ MARKER_RE = re.compile(
     re.S,
 )
 CSS_LINK_RE = re.compile(r'(href="/assets/css/styles\.css)(?:\?v=[0-9a-f]+)?(")')
+IMG_WITHOUT_ALT_RE = re.compile(r"<img\b(?![^>]*\balt=)", re.I)
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 REQUIRED = ("title", "date", "time", "location", "image")
 OPTIONAL = {"ticket_url": "", "description": "", "published": "true", "publish_at": ""}
@@ -211,21 +214,105 @@ def render_grid(events: list[dict], indent: int, empty_text: str) -> str:
     return "\n".join(render_entry(event, indent) for event in events)
 
 
+def ics_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", r"\;")
+        .replace(",", r"\,")
+        .replace("\r\n", r"\n")
+        .replace("\n", r"\n")
+    )
+
+
+def ics_fold(line: str) -> str:
+    """Fold a content line to 75 octets, as required by RFC 5545."""
+    if len(line.encode("utf-8")) <= 75:
+        return line
+    parts: list[str] = []
+    current = ""
+    for char in line:
+        if len((current + char).encode("utf-8")) > 75:
+            parts.append(current)
+            current = " " + char
+        else:
+            current += char
+    parts.append(current)
+    return "\r\n".join(parts)
+
+
+def event_start(event: dict) -> datetime | None:
+    """Combine the event date with its free-text time; None when the time is unusable."""
+    raw = event["time"].strip().upper().replace(".", "")
+    for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p", "%H:%M"):
+        try:
+            return datetime.combine(event["date"], datetime.strptime(raw, fmt).time(), tzinfo=SITE_TZ)
+        except ValueError:
+            continue
+    return None
+
+
+def render_ics(event: dict, now: datetime) -> str:
+    page_url = f"{SITE_URL}/event/{event['slug']}.html"
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Florida Palestine Network//Events//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "BEGIN:VEVENT",
+        f"UID:{event['slug']}@floridapalestinenetwork.org",
+        f"DTSTAMP:{now.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+    ]
+
+    start = event_start(event)
+    if start:
+        end = start + EVENT_DURATION
+        lines.append(f"DTSTART:{start.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
+        lines.append(f"DTEND:{end.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
+    else:
+        # No usable start time: publish an all-day entry rather than dropping the event
+        lines.append(f"DTSTART;VALUE=DATE:{event['date']:%Y%m%d}")
+        lines.append(f"DTEND;VALUE=DATE:{(event['date'] + timedelta(days=1)):%Y%m%d}")
+
+    lines.append(f"SUMMARY:{ics_escape(event['title'])}")
+    lines.append(f"LOCATION:{ics_escape(event['location'])}")
+
+    description_parts: list[str] = []
+    if event["description"]:
+        description_parts.append(re.sub(r"\n\s*\n", "\n", event["description"]))
+    if event["ticket_url"]:
+        description_parts.append(f"Tickets: {event['ticket_url']}")
+    description_parts.append(f"Details: {page_url}")
+    lines.append(f"DESCRIPTION:{ics_escape(' '.join(description_parts))}")
+    lines.append(f"URL:{page_url}")
+    lines.extend(["STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR"])
+    return "".join(f"{ics_fold(line)}\r\n" for line in lines)
+
+
 def render_event_page(event: dict, template: str, nav: str, footer: str, version: str) -> str:
     description = ""
     if event["description"]:
         paragraphs = [p.strip() for p in re.split(r"\n\s*\n", event["description"]) if p.strip()]
         description = "".join(f"            <p>{esc(p)}</p>\n" for p in paragraphs)
 
-    ticket_block = ""
+    buttons: list[str] = []
     if event["ticket_url"]:
-        ticket_block = (
-            '            <div class="button-container">\n'
+        buttons.append(
             '                <div class="button">\n'
-            f'                    <a href="{esc(event["ticket_url"])}" target="_blank">Buy Ticket</a>\n'
+            f'                    <a href="{esc(event["ticket_url"])}" target="_blank" rel="noopener">Buy Ticket</a>\n'
             "                </div>\n"
-            "            </div>\n"
         )
+    buttons.append(
+        '                <div class="button">\n'
+        f'                    <a href="/event/{event["slug"]}.ics" type="text/calendar" download>Add to Calendar</a>\n'
+        "                </div>\n"
+    )
+    button_block = '            <div class="button-container">\n' + "".join(buttons) + "            </div>\n"
+
+    image_block = (
+        f'            <p><img src="{esc(event["image_ref"])}" '
+        f'alt="{esc(event["title"])} cover image"></p>\n'
+    )
 
     page = template
     for token, value in (
@@ -238,7 +325,8 @@ def render_event_page(event: dict, template: str, nav: str, footer: str, version
         ("{{NAV}}", nav),
         ("{{FOOTER}}", footer),
         ("{{DESCRIPTION}}", description),
-        ("{{TICKET_BLOCK}}", ticket_block),
+        ("{{BUTTON_BLOCK}}", button_block),
+        ("{{IMAGE_BLOCK}}", image_block),
     ):
         page = page.replace(token, value)
     if "{{" in page:
@@ -326,6 +414,7 @@ def compute_outputs(
         outputs[Path("event") / f"{event['slug']}.html"] = render_event_page(
             event, template, nav, footer, version
         )
+        outputs[Path("event") / f"{event['slug']}.ics"] = render_ics(event, now)
 
     regions_by_page = {
         "index.html": {
@@ -357,6 +446,10 @@ def compute_outputs(
         outputs[Path(path.name)] = update_css_link(
             path.read_text(encoding="utf-8"), version, path.name
         )
+
+    for rel, text in outputs.items():
+        if rel.suffix.lower() == ".html" and IMG_WITHOUT_ALT_RE.search(text):
+            raise BuildError(f"{rel.as_posix()}: <img> without alt text")
 
     return outputs, upcoming, past, scheduled
 
@@ -434,8 +527,8 @@ def write_outputs(outputs: dict[Path, str], target_root: Path, prune: bool) -> t
         expected = {rel.name for rel in outputs if rel.parent == Path("event")}
         event_dir = target_root / "event"
         if event_dir.is_dir():
-            for path in sorted(event_dir.glob("*.html")):
-                if path.name not in expected:
+            for path in sorted(event_dir.iterdir()):
+                if path.is_file() and path.suffix in (".html", ".ics") and path.name not in expected:
                     path.unlink()
                     removed.append(f"event/{path.name}")
     return changed, removed
