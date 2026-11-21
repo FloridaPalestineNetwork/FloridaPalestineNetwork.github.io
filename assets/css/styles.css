@@ -159,18 +159,6 @@ p img {
     box-shadow: 0 10px 10px 0 rgba(0,0,0,0.5);
 }
 
-.article {
-    overflow: hidden;
-    text-align: center;
-    padding: 10px;
-}
-
-.article img {
-    width: 100%;
-    height: auto;
-    box-shadow: 0 10px 10px 0 rgba(0,0,0,0.5);
-}
-
 .news {
     overflow: hidden;
     text-align: center;
